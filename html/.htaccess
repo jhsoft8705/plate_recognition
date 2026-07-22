@@ -1,0 +1,9 @@
+php_value upload_max_filesize 20M
+php_value post_max_size 20M
+php_value max_execution_time 60
+
+<FilesMatch "\.(jpg|jpeg|png|gif)$">
+    <IfModule mod_headers.c>
+        Header set Access-Control-Allow-Origin "*"
+    </IfModule>
+</FilesMatch>
