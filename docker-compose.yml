@@ -1,0 +1,33 @@
+services:
+  web:
+    image: php:8.2-apache
+    container_name: plate_recognition_app
+    ports:
+      - "8091:80"
+    volumes:
+      - ./html/:/var/www/html/
+    environment:
+      - PLATE_API_TOKEN=c99cbae01effda79cc4e2b0df3d3efeb55de7a62
+      - VISION_API_URL=http://vehicle_vision:5000/api/detect
+    depends_on:
+      - vehicle_vision
+    command: >
+      bash -c "
+        apt-get update &&
+        apt-get install -y libjpeg-dev libpng-dev libwebp-dev &&
+        docker-php-ext-configure gd --with-jpeg --with-webp &&
+        docker-php-ext-install -j$(nproc) gd exif &&
+        a2enmod rewrite &&
+        echo 'upload_max_filesize=20M' > /usr/local/etc/php/conf.d/upload.ini &&
+        echo 'post_max_size=20M' >> /usr/local/etc/php/conf.d/upload.ini &&
+        apache2-foreground"
+
+  vehicle_vision:
+    build: ./vehicle_vision
+    container_name: vehicle_vision_app
+    expose:
+      - "5000"
+    volumes:
+      - ./vehicle_vision/:/app/
+    environment:
+      - PYTHONUNBUFFERED=1

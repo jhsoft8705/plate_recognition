@@ -1,0 +1,7 @@
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+vehicle_vision/models/*.onnx
+html/uploads/
+.DS_Store
