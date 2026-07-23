@@ -22,7 +22,7 @@ Toyota, Kia, Hyundai, Chevrolet, Nissan, Honda, Mazda, Suzuki, Mitsubishi, Volks
 
 ## Notebook
 ```
-training/train_make_model.ipynb
+training/train_brand_classifier.ipynb
 ```
 Disponible en: https://github.com/jhsoft8705/plate_recognition
 

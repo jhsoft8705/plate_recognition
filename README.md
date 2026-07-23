@@ -25,7 +25,7 @@ Sistema completo de reconocimiento vehicular con placa, marca, tipo y color. Tod
 │       └── 📄 plate_detector.pt   ← Placa (entrenado en Colab)
 │
 └── 📁 training/                   ← Notebooks Colab
-    ├── 📄 train_make_model.ipynb  ← Marca vehicular
+    ├── 📄 train_brand_classifier.ipynb  ← Marca vehicular
     └── 📄 train_plate_detector.ipynb  ← Placa
 ```
 
@@ -74,7 +74,7 @@ Sube una foto de un vehículo y obtén placa, marca, color y tipo.
 ## 🧠 Entrenamiento en Colab
 
 Los notebooks están en `training/`:
-1. **Marca:** `train_make_model.ipynb`
+1. **Marca:** `train_brand_classifier.ipynb`
 2. **Placa:** `train_plate_detector.ipynb` (próximamente)
 
 ## 📁 Sprints
