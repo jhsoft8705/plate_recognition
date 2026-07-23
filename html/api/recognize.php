@@ -1,7 +1,7 @@
 <?php
 /**
- * recognize.php — Endpoint para reconocimiento vehicular
- * Plate Recognizer (placa) + Vehicle Vision (tipo + color)
+ * recognize.php — Orquestador de reconocimiento vehicular
+ * Plate Recognizer (placa externa) + Vehicle Vision (tipo, color, marca, placa propia)
  */
 
 header('Content-Type: application/json');
@@ -9,6 +9,7 @@ header('Access-Control-Allow-Origin: *');
 
 $plateApiToken = getenv('PLATE_API_TOKEN') ?: 'c99cbae01effda79cc4e2b0df3d3efeb55de7a62';
 $visionApiUrl  = getenv('VISION_API_URL') ?: 'http://vehicle_vision:5000/api/detect';
+$plateApiUrl   = getenv('PLATE_API_URL') ?: 'http://vehicle_vision:5000/api/read-plate';
 
 if (!isset($_FILES['image']) || $_FILES['image']['error'] !== UPLOAD_ERR_OK) {
     http_response_code(400);
@@ -19,7 +20,7 @@ if (!isset($_FILES['image']) || $_FILES['image']['error'] !== UPLOAD_ERR_OK) {
 try {
     $compressedPath = compressImage($_FILES['image']['tmp_name'], $_FILES['image']['type']);
 
-    // ── 1. PLATE RECOGNIZER (placa) ──
+    // ── 1. PLATE RECOGNIZER (placa externa, gratis 500/mes) ──
     $ch = curl_init('https://api.platerecognizer.com/v1/plate-reader/');
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
@@ -32,32 +33,45 @@ try {
     $plateHttpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
-    if ($plateHttpCode !== 200 && $plateHttpCode !== 201) {
-        throw new Exception('Plate API respondió con código ' . $plateHttpCode);
-    }
+    $plateData = ($plateHttpCode === 200 || $plateHttpCode === 201) ? json_decode($plateResponse, true) : null;
 
-    $plateData = json_decode($plateResponse, true);
-    if (!$plateData) {
-        throw new Exception('Respuesta inválida de Plate API');
-    }
-
-    // ── 2. VEHICLE VISION (tipo + color) ──
+    // ── 2. VEHICLE VISION (tipo + color + marca) ──
     $visionResult = null;
-    $visionCurl = curl_init($visionApiUrl);
-    curl_setopt_array($visionCurl, [
+    $visionCh = curl_init($visionApiUrl);
+    curl_setopt_array($visionCh, [
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => ['image' => new CURLFile($compressedPath, $_FILES['image']['type'], $_FILES['image']['name'])],
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 30,
     ]);
-    $visionResponse = curl_exec($visionCurl);
-    $visionHttpCode = curl_getinfo($visionCurl, CURLINFO_HTTP_CODE);
-    curl_close($visionCurl);
+    $visionResponse = curl_exec($visionCh);
+    $visionHttpCode = curl_getinfo($visionCh, CURLINFO_HTTP_CODE);
+    curl_close($visionCh);
 
     if ($visionHttpCode === 200) {
         $visionData = json_decode($visionResponse, true);
-        if ($visionData && !empty($visionData['vehicles'])) {
-            $visionResult = $visionData['vehicles'][0]; // mejor detección
+        if ($visionData) {
+            $visionResult = !empty($visionData['vehicles'][0]) ? $visionData['vehicles'][0] : null;
+        }
+    }
+
+    // ── 3. PLATE PROPIO (nuestro detector de placas, si está entrenado) ──
+    $ourPlate = null;
+    $plateCh = curl_init($plateApiUrl);
+    curl_setopt_array($plateCh, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => ['image' => new CURLFile($compressedPath, $_FILES['image']['type'], $_FILES['image']['name'])],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 15,
+    ]);
+    $ourPlateResponse = curl_exec($plateCh);
+    $ourPlateHttpCode = curl_getinfo($plateCh, CURLINFO_HTTP_CODE);
+    curl_close($plateCh);
+
+    if ($ourPlateHttpCode === 200) {
+        $ourPlateData = json_decode($ourPlateResponse, true);
+        if ($ourPlateData && !empty($ourPlateData['plates'][0]['plate'])) {
+            $ourPlate = $ourPlateData['plates'][0];
         }
     }
 
@@ -66,14 +80,16 @@ try {
         @unlink($compressedPath);
     }
 
-    // ── 3. ARMAR RESPUESTA ──
-    $result = buildResponse($plateData, $visionResult);
+    // ── 4. ARMAR RESPUESTA ──
+    $result = buildResponse($plateData, $visionResult, $ourPlate);
     echo json_encode($result);
 
 } catch (Exception $e) {
     http_response_code(500);
     echo json_encode(['success' => false, 'message' => $e->getMessage()]);
 }
+
+// ── Funciones ──
 
 function compressImage(string $sourcePath, string $mimeType): string
 {
@@ -121,7 +137,7 @@ function compressImage(string $sourcePath, string $mimeType): string
     return $tmpPath;
 }
 
-function buildResponse(array $plateData, ?array $visionResult): array
+function buildResponse(?array $plateData, ?array $visionResult, ?array $ourPlate): array
 {
     $result = [
         'success' => true,
@@ -132,27 +148,45 @@ function buildResponse(array $plateData, ?array $visionResult): array
         'vehicleType' => null,
     ];
 
-    // Placa desde Plate Recognizer
-    if (!empty($plateData['results'][0]['plate'])) {
+    // ── Placa: prioridad a nuestro detector, fallback Plate Recognizer ──
+    if ($ourPlate && !empty($ourPlate['plate'])) {
+        $result['plate'] = [
+            'value' => $ourPlate['plate'],
+            'confidence' => round($ourPlate['confidence'], 2),
+            'autoComplete' => $ourPlate['confidence'] >= 0.80,
+            'source' => 'propio'
+        ];
+    } elseif ($plateData && !empty($plateData['results'][0]['plate'])) {
         $plateConf = $plateData['results'][0]['score'] ?? 0;
         $plateText = strtoupper(preg_replace('/[^A-Z0-9]/i', '', $plateData['results'][0]['plate']));
         $result['plate'] = [
             'value' => $plateText,
             'confidence' => round($plateConf, 2),
             'autoComplete' => $plateConf >= 0.80,
+            'source' => 'platerecognizer'
         ];
     }
 
-    // Marca/modelo solo si Plate Recognizer los devuelve (plan pago)
-    if (!empty($plateData['results'][0]['vehicle']['make'][0]['name'])) {
+    // ── Marca desde Plate Recognizer (solo plan pago) o nuestro modelo ──
+    if ($plateData && !empty($plateData['results'][0]['vehicle']['make'][0]['name'])) {
         $bc = $plateData['results'][0]['vehicle']['make'][0]['score'] ?? 0;
         $result['brand'] = [
             'value' => $plateData['results'][0]['vehicle']['make'][0]['name'],
             'confidence' => round($bc, 2),
             'autoComplete' => $bc >= 0.80,
+            'source' => 'platerecognizer'
+        ];
+    } elseif ($visionResult && !empty($visionResult['brand'])) {
+        $result['brand'] = [
+            'value' => $visionResult['brand'],
+            'confidence' => round($visionResult['brandConfidence'], 2),
+            'autoComplete' => $visionResult['brandConfidence'] >= 0.70,
+            'source' => 'vehiclevision'
         ];
     }
-    if (!empty($plateData['results'][0]['vehicle']['model'][0]['name'])) {
+
+    // ── Modelo solo desde Plate Recognizer (plan pago) ──
+    if ($plateData && !empty($plateData['results'][0]['vehicle']['model'][0]['name'])) {
         $mc = $plateData['results'][0]['vehicle']['model'][0]['score'] ?? 0;
         $result['model'] = [
             'value' => $plateData['results'][0]['vehicle']['model'][0]['name'],
@@ -161,19 +195,19 @@ function buildResponse(array $plateData, ?array $visionResult): array
         ];
     }
 
-    // Tipo y color desde Vehicle Vision (nuestro servicio)
+    // ── Tipo y color desde Vehicle Vision ──
     if ($visionResult) {
-        $result['vehicleType'] = [
+        $result['vehicleType'] = $visionResult['type'] ? [
             'value' => $visionResult['type'],
             'confidence' => round($visionResult['detectionConfidence'], 2),
             'autoComplete' => $visionResult['detectionConfidence'] >= 0.70,
-        ];
+        ] : null;
 
-        $result['color'] = [
+        $result['color'] = $visionResult['color'] ? [
             'value' => $visionResult['color'],
             'confidence' => round($visionResult['colorConfidence'], 2),
             'autoComplete' => $visionResult['colorConfidence'] >= 0.60,
-        ];
+        ] : null;
     }
 
     return $result;
