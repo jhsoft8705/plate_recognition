@@ -9,8 +9,10 @@ services:
     environment:
       - PLATE_API_TOKEN=c99cbae01effda79cc4e2b0df3d3efeb55de7a62
       - VISION_API_URL=http://vehicle_vision:5000/api/detect
+      - PLATE_API_URL=http://plate_reader:5001/api/read-plate
     depends_on:
       - vehicle_vision
+      - plate_reader
     command: >
       bash -c "
         apt-get update &&
@@ -29,5 +31,15 @@ services:
       - "5000"
     volumes:
       - ./vehicle_vision/:/app/
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  plate_reader:
+    build: ./plate_reader
+    container_name: plate_reader_app
+    expose:
+      - "5001"
+    volumes:
+      - ./plate_reader/:/app/
     environment:
       - PYTHONUNBUFFERED=1
